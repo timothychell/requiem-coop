@@ -8,7 +8,7 @@ character that mirrors their real movement, and you appear in theirs. Sessions r
 invite a friend, both tick **Ready**, and when the host starts a New Game or loads a save, the partner's
 game follows automatically.
 
-> **Status: 0.9.0-preview, experimental.** Expect bugs, and back up your saves. Movement, animation,
+> **Status: 0.10.0-preview, experimental.** Expect bugs, and back up your saves. Movement, animation,
 > costumes, shared items/doors, shared enemies and save handoff work. Combat effects (muzzle flashes,
 > blood, sounds), grabs/finishers, breakable boxes and full cloth physics aren't synced yet. Host-led
 > cutscenes, mission sync and partner torches are implemented but still need more two-PC testing.
@@ -25,6 +25,8 @@ Unofficial fan project. Not affiliated with or endorsed by Capcom. No game files
   other states that can't be described this way.
 - **Matching costume and hair:** costume meshes/materials, submesh masks, strand hair and equipment such as
   the backpack match the sender.
+- **Native co-op menu:** a Co-op entry in the game's title menu opens a lobby built from the game's own menu
+  rows: host, join friends, invite, ready up, start and leave, with controller and mouse support.
 - **Steam sessions:** friends-only lobby, invites via the Steam overlay, peer-to-peer over Steam networking.
   No port forwarding, no IP addresses. Direct IP (UDP) is available as a fallback.
 - **Ready-up:** in a session, the title screen's New Game / Continue / Load Game only go through once both
@@ -76,10 +78,11 @@ Skip this step if you already use REFramework.
 
 1. Download `RequiemCoop-<version>.zip` from this repository's **Releases** page.
 2. Extract it **into your game folder**. When asked, let it merge into the existing `reframework` folder.
-3. Check that these three files now exist:
+3. Check that these four files now exist:
    ```
    <game folder>\reframework\autorun\requiem_coop.lua
    <game folder>\reframework\autorun\require\requiem_coop_session.lua
+   <game folder>\reframework\autorun\require\requiem_coop_menu.lua
    <game folder>\reframework\plugins\requiem_coop_net.dll
    ```
    (If you ended up with `reframework\reframework\...`, you extracted one level too deep: move the
@@ -87,8 +90,8 @@ Skip this step if you already use REFramework.
 
 ### 4. Check it works
 
-Start the game. On the title screen a **Requiem Co-op** window appears showing **"Signed in as: <your Steam name>"**.
-**F6** shows/hides the window at any time.
+Start the game. The title menu now has a **Co-op** entry below Main Story. **F6** opens the co-op overlay window,
+which shows **"Signed in as: <your Steam name>"**.
 
 If it says *Network plugin not running*, `requiem_coop_net.dll` is in the wrong place or REFramework isn't installed.
 
@@ -103,18 +106,21 @@ C:\Program Files (x86)\Steam\userdata\<your Steam ID number>\3764200\remote\win6
 ### Updating / uninstalling
 
 - **Update:** close the game, then extract the new zip over the old files. Both players update together.
-- **Uninstall:** delete `reframework\autorun\requiem_coop.lua`, `reframework\autorun\require\requiem_coop_session.lua`
+- **Uninstall:** delete `reframework\autorun\requiem_coop.lua`, the two `requiem_coop_*.lua` files in `reframework\autorun\require\`
   and `reframework\plugins\requiem_coop_net.dll`. Optionally also delete the `coop_*` files in
   `reframework\data\`. Delete `dinput8.dll` to remove REFramework entirely.
 
 ## Play
 
-1. **Host:** on the title screen click **Host co-op (Steam)**. The Steam overlay opens. Invite your partner.
-2. **Partner:** accept the invite (or click **Join <name>** in the co-op window) and stay on the title screen.
-3. **Both:** tick **Ready**.
-4. **Host:** choose New Game, Continue or Load Game. The partner's game follows by itself.
+Everything happens in the game's own title menu, which has a new **Co-op** entry below Main Story.
 
-Host already playing? The partner clicks **Host is already playing - join them now** on the title screen.
+1. **Host:** choose **Co-op** > **Host Co-op Session**. Steam's invite dialog opens; invite your partner.
+2. **Partner:** accept the Steam invite, or choose **Co-op** > **Join <host's name>**.
+3. **Both:** choose **Ready**. The lobby shows whether your partner is ready.
+4. **Host:** choose **Start Game**, then New Game, Continue or Load Game. The partner's game follows by itself.
+
+Host already playing? The partner chooses **Co-op** > **Join Host's Game in Progress**.
+The overlay window (**F6**) has the same controls, plus Direct IP, the solo tests and options.
 
 Loading a save needs the partner to have **at least one save of their own**, because the game's Continue
 button is used to start the load. New Game works without any saves.
@@ -144,7 +150,7 @@ Logs are in `reframework\data\`: `coop_net_log.txt` (network plugin) and `coop_l
 
 | Message | Meaning |
 |---|---|
-| *Network plugin not running* | `requiem_coop_net.dll` isn't in `reframework\plugins`, or REFramework is missing. |
+| *Network plugin not running* (also shown in the Co-op menu) | `requiem_coop_net.dll` isn't in `reframework\plugins`, or REFramework is missing. |
 | *partner has a different mod version* / *Partner mod version: ...* | Both players need the same release. |
 | *partner is in another area* | You're in different chapters/maps. |
 | *Couldn't start loading* | The partner has no saves of their own yet. Play to the first save point once. |
@@ -191,6 +197,9 @@ don't cause once-a-second frame spikes. See [`tools/PERFORMANCE_AUDIT.md`](tools
     `app.SaveServiceManager` and `app.SaveEncryptionOperatorApp`.
 - **Session library** (`mod/reframework/autorun/require/requiem_coop_session.lua`): host cinematic decisions,
   skip votes, ordered mission events, progress reconciliation and remote lights.
+- **Title menu** (`mod/reframework/autorun/require/requiem_coop_menu.lua`): hooks the game's title menu
+  (`app.UI1010GuiBehavior.updateItems` / `onSelectItemDecided` / `onSelectItemCanceled`). It inserts a Co-op row,
+  swaps in lobby rows on demand and relabels them. GUI writes must happen in the game's update phase.
 - **Network plugin** (`plugin/requiem_coop_net.cpp`), a REFramework plugin DLL:
   - Steam lobbies, invites and `ISteamNetworkingMessages` P2P through the game's own `steam_api64.dll`
     (flat API, no Steamworks SDK needed), a direct UDP fallback, and chunked reliable save transfer.

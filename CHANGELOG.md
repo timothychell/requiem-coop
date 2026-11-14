@@ -3,6 +3,22 @@
 Both players must use the same release. Install by extracting the zip into the game folder
 (see the README). Every release is an experimental preview.
 
+## 0.10.0-preview
+
+- **Co-op is now in the game's own title menu.** A "Co-op" entry sits below Main Story. Choosing it turns the
+  menu into a co-op lobby built from the game's own rows, with its font, animation, controller and mouse input:
+  - Host Co-op Session, which also opens Steam's invite dialog.
+  - Join a friend's session (friends who are hosting are listed).
+  - Invite Friend, Ready, Start Game, Leave Session and Back.
+  - Your partner's name and ready state.
+  - Each row's description and status messages use the game's description line at the bottom.
+- Start Game returns to the main menu and opens Main Story, where the host picks New Game, Continue or
+  Load Game (the game's own save list). The partner's game follows, as before.
+- The co-op overlay window no longer opens by itself on the title screen. F6 still opens it, and it is
+  shown automatically if the menu integration fails.
+- Partner avatars aren't shown yet: the game's UI can only display texture files, and Steam avatars arrive
+  as raw pixels.
+
 ## 0.9.0-preview
 
 - **First-person animation runs natively on the partner.** The game's extra first-person animation files

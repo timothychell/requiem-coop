@@ -1,4 +1,5 @@
--- Requiem Co-op 0.9.0-preview: native playback of dynamic (first-person) motion banks,
+-- Requiem Co-op 0.10.0-preview: native Co-op entry and lobby in the game's title menu,
+-- native playback of dynamic (first-person) motion banks,
 -- performance pass (cached engine handles, native accessory constraint, staggered scans)
 -- and a negotiated lossless v2 state header.
 -- State and reliable events use the coopnet in-memory bridge (transport v5).
@@ -166,7 +167,7 @@ end
 -- negotiate this extension and acknowledge resource setup before bones stop.
 -- Complex blend trees/dynamic motions retain the existing bone fallback.
 ---------------------------------------------------------------------------
-local anim = { MOD_VERSION = "0.9.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
+local anim = { MOD_VERSION = "0.10.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
     resources = {}, capture_cache = {}, last_announce = -100, bytes = 0, mode = "bones", error = "" }
 function anim.finite(x,limit) return type(x)=='number' and x==x and math.abs(x)<(limit or 1e7) end
 function anim.valid_transform(p,r)
@@ -2282,7 +2283,7 @@ _G.__requiem_coop_lobby = {
         if why then
             lobby.pending_menu = tf   -- bring the title menu back next frame
             lobby.msg = why
-            show_window = true
+            if not (lobby.menu and lobby.menu.behavior) then show_window = true end
             return true
         end
         -- host going ahead with a partner: a new game has to be mirrored explicitly
@@ -3668,7 +3669,9 @@ re.on_frame(function()
     if down and not key_was_down then show_window = not show_window; window_forced = false end
     key_was_down = down
     local on_title = get_player() == nil
+    -- the native title-menu lobby replaces the auto-shown window; F6 still opens it
     local auto = on_title and (link.mode == nil or link.mode == "none") and not window_forced
+        and not (lobby.menu and lobby.menu.behavior)
     if (show_window or auto) then
         imgui.set_next_window_size(Vector2f.new(460, 0), 4 --[[FirstUseEver]])
         if imgui.begin_window("Requiem Co-op", true, 0) then
@@ -3853,6 +3856,96 @@ do
         destroy=function(go)if go and go:call("get_Valid") then GO_DESTROY:call(nil,go)end end})
 end
 
+-- Native title menu: a "Co-op" entry in the game's own menu that opens a co-op lobby built from
+-- the same menu rows. Engine hooks are registered once per game session and dispatch to the
+-- current script copy, so hot reloads replace the implementation.
+do
+    local module_name = "require.requiem_coop_menu"
+    package.loaded[module_name] = nil
+    local ok_m, Menu = pcall(require, module_name)
+    if ok_m then
+        local menu
+        menu = Menu.new({
+            now = now, lobby = lobby, link = function() return link end, plugin_alive = plugin_alive,
+            in_session = in_session, is_host = is_host, partner_present = partner_present, get_player = get_player,
+            host = function() cfg.mirror_test = false; save_cfg(); send_cmd("steam_host") end,
+            join = function(id) cfg.mirror_test = false; save_cfg(); send_cmd("steam_join", id) end,
+            invite = function() send_cmd("invite") end,
+            leave = function() send_cmd("leave") end,
+            toggle_ready = function() lobby.me_ready = not lobby.me_ready; announce_ready() end,
+            start = function() menu.to_main_story("Choose New Game, Continue or Load Game - your partner's game follows.") end,
+            can_join_running = function() return is_joiner() and not (sync.armed or sync.loading) end,
+            join_running = function() send_cmd("request_save"); sync.msg = "Asking the host for their game..."; menu.say(sync.msg) end,
+            coop_label = function()
+                if is_host() then return partner_present() and "Co-op  (Partner joined)" or "Co-op  (Hosting)" end
+                if is_joiner() then return "Co-op  (Joined)" end
+                return "Co-op"
+            end,
+            coop_guide = function()
+                if in_session() then return "Open the co-op lobby: ready up, invite or leave." end
+                return "Play the story together with a friend over Steam."
+            end,
+        })
+        lobby.menu = menu
+        local last_msg, last_sync = lobby.msg, sync.msg
+        re.on_pre_application_entry("LateUpdateBehavior", function()
+            if not alive() then return end
+            if lobby.msg ~= last_msg then last_msg = lobby.msg; menu.say(lobby.msg) end
+            if sync.msg ~= last_sync then last_sync = sync.msg; menu.say(sync.msg) end
+            if not menu.behavior then return end
+            local t0 = os.clock()
+            local ok_t, err_t = pcall(menu.tick)
+            if not ok_t then menu.error = tostring(err_t) end
+            prof_add("title_menu", (os.clock() - t0) * 1000)
+        end)
+        -- hook bodies live here (reloadable); the engine hooks below only forward their args
+        local function mine(args)
+            local this = sdk.to_managed_object(args[2])
+            return this and menu.behavior and this:get_address() == menu.behavior:get_address() and this or nil
+        end
+        _G.__requiem_coop_title_menu = {
+            menu = menu,
+            update_items = function(args)
+                if not alive() then return end
+                local ok, arr = pcall(menu.on_update_items, sdk.to_managed_object(args[2]), sdk.to_managed_object(args[3]))
+                if ok and arr then args[3] = sdk.to_ptr(arr) elseif not ok then menu.error = tostring(arr) end
+            end,
+            decided = function(args)
+                if not alive() then return end
+                local this = mine(args)
+                if not this then return end
+                local ok, skip = pcall(menu.on_decided, this, sdk.to_managed_object(args[3]))
+                if not ok then menu.error = tostring(skip) end
+                return ok and skip
+            end,
+            canceled = function(args)
+                if not alive() then return end
+                local this = mine(args)
+                local ok, skip = pcall(menu.on_canceled, this)
+                return this and ok and skip
+            end,
+        }
+    else
+        lobby.menu_error = tostring(Menu)
+    end
+end
+do
+    local TITLE_MENU_TD = sdk.find_type_definition("app.UI1010GuiBehavior")
+    if not _G.__requiem_coop_title_menu_hooks and TITLE_MENU_TD then
+        _G.__requiem_coop_title_menu_hooks = true
+        local function forward(name)
+            return function(args)
+                local h = _G.__requiem_coop_title_menu
+                local ok, skip = pcall(function() return h and h[name](args) end)
+                if ok and skip then return sdk.PreHookResult.SKIP_ORIGINAL end
+            end
+        end
+        sdk.hook(TITLE_MENU_TD:get_method("updateItems"), forward("update_items"), nil)
+        sdk.hook(TITLE_MENU_TD:get_method("onSelectItemDecided"), forward("decided"), nil)
+        sdk.hook(TITLE_MENU_TD:get_method("onSelectItemCanceled"), forward("canceled"), nil)
+    end
+end
+_G.__requiem_coop_menu = nil   -- disables hooks left by 0.9.0 development builds
 -- Read-only handles for the in-game benchmark (tools/bench_perf.lua). Nothing calls these.
 _G.__requiem_coop_internals = { capture_local = capture_local, visual = visual, anim = anim, wep = wep,
     scan_local_weapons = scan_local_weapons, pack_state = pack_state, unpack_state = unpack_state,
