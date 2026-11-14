@@ -1,0 +1,24 @@
+# clangd config. plugin/build.bat calls cl directly (no compile_commands.json), so flags live here.
+# clang's MSVC target locates the Visual Studio + Windows SDK headers itself.
+CompileFlags:
+  Add:
+    - --target=x86_64-pc-windows-msvc
+    - -fms-compatibility
+    - -fms-extensions
+---
+If:
+  PathMatch: plugin/.*\.(cpp|h|hpp)
+CompileFlags:
+  Add: [-xc++, -std=c++17, -DWIN32_LEAN_AND_MEAN, -DNOMINMAX, -D_CRT_SECURE_NO_WARNINGS]
+---
+If:
+  PathMatch: plugin/third_party/lua/.*
+CompileFlags:
+  Add: [-xc, -std=c99]
+Diagnostics:
+  Suppress: "*"
+---
+If:
+  PathMatch: plugin/third_party/lua/lua\.hpp
+CompileFlags:
+  Add: [-xc++, -std=c++17]

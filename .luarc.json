@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.4",
+  "runtime.path": ["?.lua", "?/init.lua", "mod/reframework/autorun/require/?.lua"],
+  "diagnostics.globals": [
+    "sdk", "re", "imgui", "json", "log", "draw", "fs", "d2d", "reframework",
+    "ValueType", "Vector2f", "Vector3f", "Vector4f", "Quaternion", "Matrix4x4f",
+    "coopnet", "H", "S"
+  ],
+  "workspace.library": ["mod/reframework/autorun/require"],
+  "workspace.ignoreDir": [".package-*", "dist", "backups", "plugin/build", ".git"],
+  "workspace.checkThirdParty": false
+}
