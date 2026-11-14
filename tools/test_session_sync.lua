@@ -16,7 +16,7 @@ local function pair(opts)
             tracks=opts[role..'_tracks'],
             role=function()return role end,peer=function()return role..'-peer'end,
             send=function(k,d)wire[#wire+1]={from=role,k=k,d=copy(d)}end,
-            area=function()return 'Chap2_10'end,where=function()return{0,0,0,0,0,0,1}end,
+            area=function()if opts.no_area then return nil end;return 'Chap2_10'end,where=function()return{0,0,0,0,0,0,1}end,
             playing=function()return actor.playing end,current_id=function()return actor.id end,
             can_skip=function()return actor.can_skip end,warp=function()return true end,
             play=function(id,flow,args)
@@ -182,6 +182,21 @@ do
     for i=#wire,1,-1 do if wire[i].k=='cinreq3' then table.remove(wire,i) end end
     a.client.online=false;tick()
     check(a.client.playing and a.client.id==109,'held scene not released after disconnect')
+end
+do
+    -- Real session: a New Game's opening cinematic runs before any player exists, so area() is nil.
+    -- The client rejected every host cin3 (no area string): it never saw the host's scene, played
+    -- its own after the fallback, and the two skip votes never matched.
+    local h,c,a,tick,flush=pair({no_area=true})
+    h.begin(110000,0);a.host.id=110000;a.host.playing=true;flush()
+    for _=1,4 do tick()end
+    check(c.cin.token==h.cin.token,'client ignored host cinematic without an area')
+    check(a.client.playing and a.client.id==110000,'area-less host cinematic did not play on client')
+    for _=1,4 do tick()end
+    check(h.cin.peer_ready,'client never acknowledged the area-less cinematic')
+    h.request_skip();c.request_skip();flush()
+    for _=1,6 do tick()end
+    check(a.host.skips==1 and a.client.skips==1,'skip votes did not commit without an area')
 end
 local t=0
 local torch=M.torch({now=function()return t end,peer_stream=function()return 123 end})

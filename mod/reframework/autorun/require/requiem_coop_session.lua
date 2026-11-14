@@ -14,6 +14,10 @@ function M.new(E)
     local now=E.now
     local function connected() return E.connected() end
     local function host() return E.role()=='host' end
+    -- No player exists during e.g. a New Game's opening cinematic, so the area is nil there. JSON drops
+    -- nil fields, and the client rejected every cin3 without an area string (real session: the
+    -- partner never saw the host's cutscene, and skip votes never matched). Normalise to ''.
+    local function area() return E.area() or '' end
     local function valid_rpc(d)
         if not integer(d.seq) or d.seq<1 or not integer(d.index) or d.index<1 or d.index>(E.max_rpc or 64)
             or type(d.args)~='table' or #d.args>8 then return false end
@@ -43,7 +47,7 @@ function M.new(E)
         if host() then
             if S.cin.active and S.cin.id==id and now()-(S.cin.started or 0)<0.2 then return false end
             S.serial=S.serial+1
-            S.cin={token=S.epoch..'-'..S.serial,id=id,flow=flow,area=E.area(),where=E.where(),
+            S.cin={token=S.epoch..'-'..S.serial,id=id,flow=flow,area=area(),where=E.where(),
                 phase='prepare',active=true,started=now(),seen=false,auto=pending and pending.auto or false}
             S.vote_local,S.vote_peer=false,false;S.stats.starts=S.stats.starts+1
             S.message=''
@@ -51,7 +55,7 @@ function M.new(E)
         end
         S.pending={id=id,flow=flow,args=pending,until_time=now()+30,fallback_at=now()+(E.fallback_seconds or 10)}
         S.message='Waiting for the host to reach this cutscene...'
-        send('cinreq3',{id=id,flow=flow,area=E.area(),where=E.where(),auto=pending and pending.auto or false})
+        send('cinreq3',{id=id,flow=flow,area=area(),where=E.where(),auto=pending and pending.auto or false})
         return true
     end
     function S.started(id)
@@ -132,8 +136,8 @@ function M.new(E)
                 if item then send('rpc3',item) else S.error='Mission event history expired; checkpoint resync required';break end
             end
         elseif k=='cinreq3' and host() then
-            if integer(d.id) and integer(d.flow) and not S.cin.active and d.area==E.area() then
-                S.queue.request={id=d.id,flow=d.flow,area=d.area,where=d.where,args={auto=d.auto==true},until_time=now()+20}
+            if integer(d.id) and integer(d.flow) and not S.cin.active and (d.area or '')==area() then
+                S.queue.request={id=d.id,flow=d.flow,area=d.area or '',where=d.where,args={auto=d.auto==true},until_time=now()+20}
             end
         elseif k=='cinvote3' and host() then
             if d.token==S.cin.token and d.id==S.cin.id then
@@ -144,9 +148,10 @@ function M.new(E)
             if d.token==S.cin.token and d.id==S.cin.id then S.cin.peer_ready=true;S.cin.peer_skippable=d.skippable==true end
         elseif k=='cin3' and not host() then
             if not integer(d.seq) or d.seq<=S.last_host_seq or type(d.token)~='string'
-                or not integer(d.id) or not integer(d.flow) or type(d.area)~='string'
+                or not integer(d.id) or not integer(d.flow) or (d.area~=nil and type(d.area)~='string')
                 or (d.phase~='prepare' and d.phase~='play' and d.phase~='skip' and d.phase~='end') then return end
             S.last_host_seq=d.seq
+            d.area=d.area or ''
             if S.cin.token~=d.token then
                 S.vote_local=false
                 S.message=''
@@ -157,7 +162,7 @@ function M.new(E)
             if d.vote and not S.vote_local then S.message='The host wants to skip. Hold skip to agree.' end
             S.cin.active=d.phase=='play' or d.phase=='prepare'
             if d.phase=='prepare' then
-                if E.load and d.area==E.area() and not S.cin.preloaded then
+                if E.load and d.area==area() and not S.cin.preloaded then
                     local ok,value=pcall(E.load,d.id)
                     if ok and value~=false then S.cin.preloaded=true end
                 end
@@ -255,7 +260,7 @@ function M.new(E)
             if S.cin.token and now()-S.last_cin>0.5 then publish() end
             if S.queue.request and not playing and not S.cin.active then
                 local q=S.queue.request;S.queue.request=nil
-                if q.area==E.area() and now()<q.until_time then
+                if q.area==area() and now()<q.until_time then
                     -- Re-enter through the normal host hook, which allocates
                     -- the authoritative instance and publishes the start.
                     local ok,result=pcall(E.play,q.id,q.flow,q.args)
@@ -277,7 +282,7 @@ function M.new(E)
             local q=S.queue.play
             if q then
                 if now()>q.until_time then S.queue.play=nil;S.error='Timed out waiting for host cinematic resources'
-                elseif q.area==E.area() and not playing then
+                elseif q.area==area() and not playing then
                     if q.where and not q.warped then q.warped=E.warp(q.where)~=false
                     else
                         local args=S.pending and S.pending.id==q.id and S.pending.args or {}
