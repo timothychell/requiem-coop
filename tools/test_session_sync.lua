@@ -6,12 +6,14 @@ local M=assert(session_source and load(session_source,'requiem_coop_session')
 local passed=0
 local function check(ok,message)passed=passed+1;assert(ok,message)end
 local function copy(v)if type(v)~='table' then return v end;local t={};for k,x in pairs(v)do t[k]=copy(x)end;return t end
-local function pair()
+local function pair(opts)
+    opts=opts or {}
     local clock=0;local wire={};local endpoints={};local actors={}
     for _,role in ipairs({'host','client'})do
-        local actor={playing=false,id=nil,skips=0,plays=0,can_skip=true,rpcs={},chapter='Chap2',flow=0}
+        local actor={playing=false,id=nil,skips=0,plays=0,can_skip=true,rpcs={},chapter='Chap2',flow=0,online=true}
         actors[role]=actor
-        local E={epoch=role..'-epoch',now=function()return clock end,connected=function()return true end,
+        local E={epoch=role..'-epoch',now=function()return clock end,connected=function()return actor.online end,
+            tracks=opts[role..'_tracks'],
             role=function()return role end,peer=function()return role..'-peer'end,
             send=function(k,d)wire[#wire+1]={from=role,k=k,d=copy(d)}end,
             area=function()return 'Chap2_10'end,where=function()return{0,0,0,0,0,0,1}end,
@@ -148,6 +150,38 @@ do
     a.client.can_skip=true
     for _=1,10 do tick()end
     check(a.host.skips==1 and a.client.skips==1,'skippable transition did not release votes')
+end
+do
+    -- Real session: reading the host's timelines threw ("get_size is not callable"), the cin3
+    -- start was never sent and the client sat on a black screen.
+    local h,c,a,tick,flush=pair({host_tracks=function() error("method 'get_size' is not callable (a nil value)") end})
+    check(c.begin(107,0,{auto=false,end_callback='cb'}),'client scene was not deferred')
+    flush()
+    for _=1,6 do tick()end
+    check(a.host.id==107 and a.client.playing and a.client.id==107,'host track error blocked the client cutscene')
+end
+do
+    -- Host never answers the request: the client plays the held scene itself, with its callbacks.
+    local h,c,a,tick,flush,wire=pair()
+    check(c.begin(108,3,{auto=false,end_callback='cb108'}),'client scene was not deferred')
+    for i=#wire,1,-1 do if wire[i].k=='cinreq3' then table.remove(wire,i) end end
+    for _=1,50 do tick()end
+    check(not a.client.playing,'client released the held scene too early')
+    for _=1,60 do tick()end
+    check(a.client.playing and a.client.id==108 and a.client.args.end_callback=='cb108','held scene never played locally')
+    -- the host reaches the same scene late: the client must not play it again
+    a.client.playing=false
+    h.begin(108,3);a.host.id=108;a.host.playing=true;flush()
+    for _=1,6 do tick()end
+    check(a.client.plays==1,'late host start replayed the scene on the client')
+end
+do
+    -- Connection lost while a scene is held: play it immediately.
+    local h,c,a,tick,flush,wire=pair()
+    check(c.begin(109,0,{}),'client scene was not deferred')
+    for i=#wire,1,-1 do if wire[i].k=='cinreq3' then table.remove(wire,i) end end
+    a.client.online=false;tick()
+    check(a.client.playing and a.client.id==109,'held scene not released after disconnect')
 end
 local t=0
 local torch=M.torch({now=function()return t end,peer_stream=function()return 123 end})

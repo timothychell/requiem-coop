@@ -18,6 +18,15 @@ Both players must use the same release. Install by extracting the zip into the g
   shown automatically if the menu integration fails.
 - Partner avatars aren't shown yet: the game's UI can only display texture files, and Steam avatars arrive
   as raw pixels.
+- **Fixed: the partner got a black screen with no audio at cutscenes.** Reading the host's cutscene timelines
+  could fail ("get_size is not callable") around scene changes. That failure also stopped the host's "start"
+  message, so the partner's held cutscene never played. Timeline positions are now optional, and a failure
+  can't block the message.
+- **New safety net:** if the host doesn't confirm a cutscene the partner's game wants to play within 10 s (or
+  the connection drops), the partner plays it locally with the game's own callbacks, instead of waiting
+  forever. A late host start doesn't replay it.
+- Fixed in the menu: Co-op opened Options on a real click or key press; Ready/Invite froze the lobby; Start Game
+  didn't open Main Story; and the Main Story submenu's Load Game was renamed to Co-op.
 
 ## 0.9.0-preview
 

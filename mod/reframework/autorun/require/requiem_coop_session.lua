@@ -24,9 +24,16 @@ function M.new(E)
     local function cinema_packet()
         S.tx=S.tx+1
         local c=S.cin
+        -- Timeline positions are an optional correction. A failure reading them must never
+        -- stop the start/end message itself: the client holds its cutscene until it arrives.
+        local tracks
+        if c.active and E.tracks then
+            local ok,value=pcall(E.tracks)
+            if ok then tracks=value end
+        end
         return {epoch=S.epoch,seq=S.tx,token=c.token,id=c.id,flow=c.flow,area=c.area,
             where=c.where,phase=c.phase,playing=c.active,ready=c.seen or false,
-            vote=S.vote_local,auto=c.auto or false,tracks=c.active and E.tracks and E.tracks() or nil}
+            vote=S.vote_local,auto=c.auto or false,tracks=tracks}
     end
     local function publish() if host() and S.cin.token then E.send('cin3',cinema_packet());S.last_cin=now() end end
     function S.hide_puppet() return S.cin.active or S.queue.play~=nil or (E.playing and E.playing()) or false end
@@ -42,7 +49,8 @@ function M.new(E)
             S.message=''
             publish();return false
         end
-        S.pending={id=id,flow=flow,args=pending,until_time=now()+30}
+        S.pending={id=id,flow=flow,args=pending,until_time=now()+30,fallback_at=now()+(E.fallback_seconds or 10)}
+        S.message='Waiting for the host to reach this cutscene...'
         send('cinreq3',{id=id,flow=flow,area=E.area(),where=E.where(),auto=pending and pending.auto or false})
         return true
     end
@@ -160,6 +168,8 @@ function M.new(E)
                     if E.correct_tracks and type(d.tracks)=='table' then E.correct_tracks(d.tracks) end
                 elseif S.cin.seen then
                     S.message='Waiting for the host cinematic to finish'
+                elseif S.local_played and S.local_played[d.id] and now()-S.local_played[d.id]<180 then
+                    -- already played here after the host was too late; don't play it twice
                 elseif not S.queue.play then
                     S.queue.play={id=d.id,flow=d.flow,area=d.area,where=d.where,auto=d.auto==true,until_time=now()+30}
                 end
@@ -178,7 +188,24 @@ function M.new(E)
             S.last_progress_seq=d.seq;S.queue.progress=d
         end
     end
+    -- Client: a cutscene the game wanted to play is held until the host confirms it. If that
+    -- never happens (host elsewhere, message lost, connection gone), play it here with the game's
+    -- own callbacks, so the client is never left on a black screen.
+    local function release_pending(reason)
+        local p=S.pending
+        if not p then return end
+        S.pending=nil
+        S.local_played=S.local_played or {};S.local_played[p.id]=now()
+        S.internal_play=S.internal_play+1
+        local ok,result=pcall(E.play,p.id,p.flow,p.args or {})
+        S.internal_play=S.internal_play-1
+        if ok and result~=false then S.stats.starts=S.stats.starts+1;S.message=reason
+        else S.error='Could not play the held cutscene: '..tostring(result) end
+    end
     function S.tick()
+        if not host() and S.pending and (not connected() or not S.cap) then
+            release_pending('Partner connection lost - playing the cutscene here.')
+        end
         local peer=E.peer()
         if S.peer~=peer then
             S.peer=peer;S.cap=false;S.peer_epoch=nil;S.last_hello=-100;S.last_host_seq=-1;S.last_progress_seq=-1
@@ -262,6 +289,10 @@ function M.new(E)
                         else S.error=ok and 'Client cutscene request returned false' or tostring(result) end
                     end
                 end
+            end
+            local p=S.pending
+            if p and not S.queue.play and not playing and not (S.cin.active and S.cin.id==p.id) and now()>=p.fallback_at then
+                release_pending('The host did not start this cutscene - playing it here.')
             end
             if S.cin.active and playing and (not E.current_id or E.current_id()==S.cin.id) then
                 S.cin.seen=true
@@ -361,15 +392,32 @@ function M.engine(E)
         local folder=go:call('get_Folder')
         return (folder and folder:call('get_Path') or '')..'/'..table.concat(names,'/')
     end
+    -- findComponents normally returns a SystemArray, but around scene changes it has come back as
+    -- a plain managed object without get_size (seen in a real session: it broke cutscene sync).
+    local function array_items(list)
+        local out={}
+        if not list then return out end
+        local ok,n=pcall(function() if list.get_size then return list:get_size() end return list:call('get_Length') end)
+        for i=0,(ok and type(n)=='number' and n or 0)-1 do
+            local ok_e,e=pcall(function()
+                if list.get_element then return list:get_element(i) end
+                return list:call('GetValue(System.Int32)',i)
+            end)
+            if ok_e and e then out[#out+1]=e end
+        end
+        return out
+    end
     local function timelines()
         local scene=E.scene();local list=scene and scene:call('findComponents(System.Type)',sdk.typeof('via.timeline.Timeline'))
         local out={}
-        for i=0,(list and list:get_size() or 0)-1 do
-            local t=list:get_element(i);local state=t:call('get_PlayState')
-            if state==1 or state==3 then
-                local go=t:call('get_GameObject');local name=go:call('get_Name')
-                if not name:find('PlayerDead',1,true) and not name:find('DamageTest',1,true) then out[path(go)]=t end
-            end
+        for _,t in ipairs(array_items(list)) do
+            pcall(function()
+                local state=t:call('get_PlayState')
+                if state==1 or state==3 then
+                    local go=t:call('get_GameObject');local name=go:call('get_Name')
+                    if not name:find('PlayerDead',1,true) and not name:find('DamageTest',1,true) then out[path(go)]=t end
+                end
+            end)
         end
         return out
     end
