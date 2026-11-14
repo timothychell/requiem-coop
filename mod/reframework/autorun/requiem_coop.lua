@@ -599,7 +599,10 @@ function anim.event(k, v)
 end
 
 function anim.tick()
-    local peer = tostring(link.mode) .. ":" .. tostring(link.peer) .. ":" .. tostring(link.lobby) .. ":" .. tostring(link.connected)
+    -- Identity of the partner session only. link.connected is "pose packets in the last 3 s", which
+    -- drops at every title screen, cutscene and load; including it re-negotiated everything (and fell
+    -- back to bone streaming) after each one. A restarted partner re-requests missing definitions.
+    local peer = tostring(link.mode) .. ":" .. tostring(link.peer) .. ":" .. tostring(link.lobby)
     if anim.peer ~= peer then
         anim.peer, anim.peer_version, anim.ready, anim.remote = peer, 0, {}, {}
         anim.compact_peer, anim.layout_ready = false, {}
