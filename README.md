@@ -8,7 +8,7 @@ character that mirrors their real movement, and you appear in theirs. Sessions r
 invite a friend, both tick **Ready**, and when the host starts a New Game or loads a save, the partner's
 game follows automatically.
 
-> **Status: 0.12.0-preview, experimental.** Expect bugs, and back up your saves. Movement, animation,
+> **Status: 0.13.0-preview, experimental.** Expect bugs, and back up your saves. Movement, animation,
 > costumes, shared items/doors, shared enemies and save handoff work. Combat effects (muzzle flashes,
 > blood, sounds), grabs/finishers, breakable boxes and full cloth physics aren't synced yet. Host-led
 > cutscenes, mission sync and partner torches are implemented but still need more two-PC testing.

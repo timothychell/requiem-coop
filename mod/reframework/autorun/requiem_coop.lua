@@ -1,4 +1,7 @@
--- Requiem Co-op 0.12.0-preview: cutscene pause barrier (all players start together),
+-- Requiem Co-op 0.13.0-preview: debug-only host remote control of connected clients
+-- (run Lua in the client's REFramework, read its state, deploy files, hot-reload Lua; consent-gated,
+--  absent from release builds) exposed to an MCP server (tools/mcp); plus prior:
+-- cutscene pause barrier (all players start together),
 -- native Co-op entry and lobby in the game's title menu,
 -- native playback of dynamic (first-person) motion banks,
 -- performance pass (cached engine handles, native accessory constraint, staggered scans)
@@ -16,6 +19,7 @@ local cfg = {
     name_tag = true,
     window_key = 0x75,     -- F6 toggles the co-op window
     allow_debug_requests = false,  -- let the host ask this game for a (read-only) status report
+    allow_remote_control = false,  -- DEBUG builds only: let the host run code / deploy files on this PC
     last_ip = "",
     send_hz = 30,
     interp_ms = 60,        -- fixed playback delay (only used when auto_interp is off)
@@ -168,7 +172,7 @@ end
 -- negotiate this extension and acknowledge resource setup before bones stop.
 -- Complex blend trees/dynamic motions retain the existing bone fallback.
 ---------------------------------------------------------------------------
-local anim = { MOD_VERSION = "0.12.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
+local anim = { MOD_VERSION = "0.13.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
     resources = {}, capture_cache = {}, last_announce = -100, bytes = 0, mode = "bones", error = "" }
 function anim.finite(x,limit) return type(x)=='number' and x==x and math.abs(x)<(limit or 1e7) end
 function anim.valid_transform(p,r)
@@ -2252,6 +2256,10 @@ local function handle_event(e)
     elseif k == "cs" or k == "csend" or k == "skip" then
         local h = _G.__requiem_coop_cs
         if h then h.event(k, v) end
+    elseif k == "rcexec" or k == "rcload" or k == "rcfile" or k == "rcres" or k == "rcack" then
+        -- remote control (debug builds only; nil handler in release = ignored)
+        local h = _G.__requiem_coop_rc
+        if h then h.event(k, v) end
     elseif k == "newgame" and is_joiner() then
         lobby.pending_newgame = v
         lobby.pending_newgame_until = now() + 15
@@ -3614,6 +3622,9 @@ local function draw_panel()
         if torch and torch.error~="" then imgui.text_colored("Partner torch: "..torch.error,0xFF4040FF) end
     end
     imgui.text("In game: " .. status .. "    (Requiem Co-op " .. anim.MOD_VERSION .. ")")
+    if _G.__requiem_coop_rc and cfg.allow_remote_control then
+        imgui.text_colored("HOST REMOTE CONTROL ENABLED - the host can run code and deploy files on this PC (Options to disable).", 0xFF40A0FF)
+    end
     if partner then
         imgui.text(string.format("Partner character: %s  area=%s  (%.1fs ago)", tostring(partner.kind),
             tostring(partner.area), now() - partner_rx_time))
@@ -3623,6 +3634,11 @@ local function draw_panel()
         c, v = imgui.checkbox("Show name tag", cfg.name_tag); if c then cfg.name_tag = v; save_cfg() end
         c, v = imgui.checkbox("Let the host request debug info from me", cfg.allow_debug_requests)
         if c then cfg.allow_debug_requests = v; save_cfg() end
+        if _G.__requiem_coop_rc then
+            c, v = imgui.checkbox("Allow host remote control (DEBUG: host can run code & deploy files on this PC)",
+                cfg.allow_remote_control)
+            if c then cfg.allow_remote_control = v; save_cfg() end
+        end
         c, v = imgui.checkbox("Automatic smoothing (recommended)", cfg.auto_interp); if c then cfg.auto_interp = v; save_cfg() end
         c, v = imgui.checkbox("Native animation (experimental, with bone fallback)", cfg.native_animation)
         if c then cfg.native_animation = v; save_cfg() end
@@ -3666,6 +3682,9 @@ re.on_frame(function()
     if fms > prof.frame_max then prof.frame_max = fms end
     pcall(draw_world_overlay)
     pcall(draw_gameover_overlay)
+    if _G.__requiem_coop_rc and cfg.allow_remote_control then
+        pcall(draw.text, "REQUIEM CO-OP: HOST REMOTE CONTROL ENABLED", 40, 70, 0xFF40A0FF)
+    end
     flush_cmd()
 
     -- F6 toggles the window; it opens by itself on the title screen until a session starts
@@ -3931,6 +3950,51 @@ do
         }
     else
         lobby.menu_error = tostring(Menu)
+    end
+end
+-- Remote control (DEBUG BUILDS ONLY). The module file is absent from release packages, so
+-- pcall(require) fails there and _G.__requiem_coop_rc stays nil: a release build has no code
+-- path that runs host-sent commands. When present, it mirrors the local dev bridge over the
+-- reliable co-op event channel, gated by the client's "Allow host remote control" consent.
+do
+    local module_name = "require.requiem_coop_rc"
+    package.loaded[module_name] = nil
+    local ok_rc, RC = pcall(require, module_name)
+    if ok_rc and type(RC) == "table" and RC.init then
+        -- compact, depth-limited serializer for exec results (engine objects -> "<TypeName>")
+        local function serialize(v, depth)
+            depth = depth or 2
+            local t = type(v)
+            if t ~= "table" and t ~= "userdata" then
+                if t == "function" or t == "thread" then return tostring(v) end
+                return v
+            end
+            if t == "userdata" then
+                local ok_td, td = pcall(function() return v:get_type_definition() end)
+                if ok_td and td then
+                    local name = "<" .. td:get_full_name() .. ">"
+                    local ok_sz, sz = pcall(function() return v:get_size() end)
+                    if ok_sz and type(sz) == "number" and depth > 0 then
+                        local items = {}
+                        for i = 0, math.min(sz, 32) - 1 do
+                            local ok_e, e = pcall(function() return v:get_element(i) end)
+                            items[i + 1] = ok_e and serialize(e, depth - 1) or "<err>"
+                        end
+                        return { ["$type"] = td:get_full_name(), ["$size"] = sz, ["$items"] = items }
+                    end
+                    return name
+                end
+                return tostring(v)
+            end
+            if depth <= 0 then return "<table>" end
+            local out, n = {}, 0
+            for k, val in pairs(v) do
+                n = n + 1; if n > 256 then out["..."] = "truncated"; break end
+                out[type(k) == "string" and k or tostring(k)] = serialize(val, depth - 1)
+            end
+            return out
+        end
+        _G.__requiem_coop_rc = RC.init({ cfg = cfg, emit = bridge_event, now = now, serialize = serialize })
     end
 end
 do

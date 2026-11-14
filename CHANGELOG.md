@@ -3,6 +3,23 @@
 Both players must use the same release. Install by extracting the zip into the game folder
 (see the README). Every release is an experimental preview.
 
+## 0.13.0-preview
+
+- **Debug-only host remote control of connected clients (developer tool).** In DEBUG builds the host can
+  drive a connected partner's game the same way the local dev bridge drives the host: run arbitrary Lua in
+  the client's REFramework, read its state, write files into the client's `reframework/data`, and
+  hot-reload Lua on it. This is for debugging two-PC sync; it is **not** in release builds.
+  - **Absent from releases.** The module (`require/requiem_coop_rc.lua`) is only packaged with
+    `package.ps1 -Debug`; a normal release has no code path that runs anything the host sends.
+  - **Client consent required.** The client must tick "Allow host remote control" (Options). Until then
+    every host request is answered with `{denied}` and nothing runs. While it is on, the game shows a
+    persistent on-screen "HOST REMOTE CONTROL ENABLED" banner.
+  - Travels over the existing reliable event channel (chunked); an older/release peer ignores the events.
+- **MCP server (`tools/mcp/requiem-coop-mcp.js`).** Exposes the running game to an MCP client the same way
+  the bridge does (`coop_status`, `game_eval`) and, when a consenting debug client is connected, exposes it
+  too (`peer_eval`, `peer_status`, `peer_deploy_file`, `peer_reload`). Dependency-free Node stdio server;
+  drives everything through the dev bridge.
+
 ## 0.12.0-preview
 
 - **Cutscene barrier rebuilt around freezing instead of holding.** 0.11.0 blocked the game's own "play

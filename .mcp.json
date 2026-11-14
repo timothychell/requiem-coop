@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "requiem-coop": {
+      "command": "node",
+      "args": ["tools/mcp/requiem-coop-mcp.js"],
+      "env": {}
+    }
+  }
+}
