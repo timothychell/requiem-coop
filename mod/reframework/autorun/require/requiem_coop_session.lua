@@ -12,6 +12,7 @@ function M.new(E)
         rpc_tx=0,rpc_rx=0,rpc_pending={},rpc_journal={},request_tx=0,request_seen={},request_pending={},
         stats={starts=0,skips=0,repairs=0,flow_applied=0,flow_queued=0},error=''}
     local now=E.now
+    local release_pending   -- defined before S.tick; used by S.handle
     local function connected() return E.connected() end
     local function host() return E.role()=='host' end
     -- No player exists during e.g. a New Game's opening cinematic, so the area is nil there. JSON drops
@@ -37,21 +38,52 @@ function M.new(E)
         end
         return {epoch=S.epoch,seq=S.tx,token=c.token,id=c.id,flow=c.flow,area=c.area,
             where=c.where,phase=c.phase,playing=c.active,ready=c.seen or false,
-            vote=S.vote_local,auto=c.auto or false,tracks=tracks}
+            vote=S.vote_local,auto=c.auto or false,tracks=tracks,barrier=c.barrier or false}
     end
     local function publish() if host() and S.cin.token then E.send('cin3',cinema_packet());S.last_cin=now() end end
     function S.hide_puppet() return S.cin.active or S.queue.play~=nil or (E.playing and E.playing()) or false end
-    function S.begin(id,flow,pending)
+    -- Start barrier (host): every cutscene is held on both PCs ("Waiting for all players...") until
+    -- the partner reports ready (or absent/timeout); then the host sends "go" and both play at once.
+    -- hold: the game's own held call {id,flow,args} on the host, nil when the partner triggered it.
+    local function open_barrier(id,flow,hold,where)
+        S.serial=S.serial+1
+        S.cin={token=S.epoch..'-'..S.serial,id=id,flow=flow,area=area(),where=where or E.where(),
+            phase='prepare',active=true,started=now(),seen=false,barrier=true,
+            auto=hold and hold.args and hold.args.auto or false}
+        S.host_hold=hold
+        S.vote_local,S.vote_peer=false,false
+        S.message='Waiting for all players...'
+        publish()
+    end
+    function S.begin(id,flow,pending,playing_now)
         if S.internal_play>0 then return false end
         if not connected() or not S.cap then return false end
         if host() then
-            if S.cin.active and S.cin.id==id and now()-(S.cin.started or 0)<0.2 then return false end
+            if S.cin.active and S.cin.id==id then
+                -- the game asked again for a scene that's already held / just started
+                if S.cin.barrier and S.cin.phase=='prepare' then
+                    if not S.host_hold then S.host_hold={id=id,flow=flow,args=pending} end
+                    return true
+                end
+                if now()-(S.cin.started or 0)<0.2 then return false end
+            end
+            if S.peer_barrier and not playing_now then
+                open_barrier(id,flow,{id=id,flow=flow,args=pending})
+                S.stats.starts=S.stats.starts+1
+                return true
+            end
             S.serial=S.serial+1
             S.cin={token=S.epoch..'-'..S.serial,id=id,flow=flow,area=area(),where=E.where(),
                 phase='prepare',active=true,started=now(),seen=false,auto=pending and pending.auto or false}
             S.vote_local,S.vote_peer=false,false;S.stats.starts=S.stats.starts+1
             S.message=''
             publish();return false
+        end
+        if S.cin.active and S.cin.barrier and S.cin.phase=='prepare' and S.cin.id==id then
+            -- the host already opened the barrier for this scene: hold ours and join it
+            S.pending={id=id,flow=flow,args=pending,until_time=now()+60,fallback_at=now()+30}
+            S.message='Waiting for all players...'
+            return true
         end
         if S.cin.active and S.cin.id==id then
             -- The host is already in this scene (real session: halfway through when the partner's game
@@ -61,7 +93,7 @@ function M.new(E)
             return false
         end
         S.pending={id=id,flow=flow,args=pending,until_time=now()+30,fallback_at=now()+(E.fallback_seconds or 10)}
-        S.message='Waiting for the host to reach this cutscene...'
+        S.message='Waiting for all players...'
         send('cinreq3',{id=id,flow=flow,area=area(),where=E.where(),auto=pending and pending.auto or false})
         return true
     end
@@ -122,6 +154,7 @@ function M.new(E)
                 S.last_rpc_repair=now();send('rpcrepair3',{after=S.rpc_rx})
             end
             S.cap,S.peer_epoch=true,d.epoch
+            S.peer_barrier=d.barrier==1
             return
         end
         if not connected() or not S.cap or d.epoch~=S.peer_epoch then return end
@@ -143,8 +176,31 @@ function M.new(E)
                 if item then send('rpc3',item) else S.error='Mission event history expired; checkpoint resync required';break end
             end
         elseif k=='cinreq3' and host() then
-            if integer(d.id) and integer(d.flow) and not S.cin.active and (d.area or '')==area() then
+            if not (integer(d.id) and integer(d.flow)) then return end
+            if S.cin.active and S.cin.id==d.id then return end   -- already held/playing: the client follows cin3
+            if S.peer_barrier then
+                -- The partner's game triggered it: open the barrier here too, or say at once that the
+                -- host can't take part, so the partner doesn't sit waiting.
+                if S.cin.active then send('cindeny3',{id=d.id,reason='busy'});return end
+                if (d.area or '')~=area() then send('cindeny3',{id=d.id,reason='area'});return end
+                if d.where and E.warp then pcall(E.warp,d.where) end
+                open_barrier(d.id,d.flow,nil,d.where)
+                S.cin.auto=d.auto==true
+                S.stats.starts=S.stats.starts+1
+                return
+            end
+            if not S.cin.active and (d.area or '')==area() then
                 S.queue.request={id=d.id,flow=d.flow,area=d.area or '',where=d.where,args={auto=d.auto==true},until_time=now()+20}
+            end
+        elseif k=='cinready3' and host() then
+            if d.token==S.cin.token and S.cin.barrier then
+                S.cin.peer_joined=true
+                if d.absent==true then S.cin.peer_absent=true end
+            end
+        elseif k=='cindeny3' and not host() then
+            if S.pending and S.pending.id==d.id then
+                release_pending(d.reason=='area' and 'Your partner is in another area - playing the cutscene here.'
+                    or 'Your partner is in another cutscene - playing this one here.')
             end
         elseif k=='cinvote3' and host() then
             if d.token==S.cin.token and d.id==S.cin.id then
@@ -162,13 +218,28 @@ function M.new(E)
             if S.cin.token~=d.token then
                 S.vote_local=false
                 S.message=''
-                S.cin={token=d.token,id=d.id,flow=d.flow,area=d.area,where=d.where,
+                S.cin={token=d.token,id=d.id,flow=d.flow,area=d.area,where=d.where,barrier=d.barrier==true,
                     phase=d.phase,active=d.phase=='play' or d.phase=='prepare',started=now(),seen=false}
             end
             S.cin.phase=d.phase
             if d.vote and not S.vote_local then S.message='The host wants to skip. Hold skip to agree.' end
             S.cin.active=d.phase=='play' or d.phase=='prepare'
-            if d.phase=='prepare' then
+            if S.cin.barrier and d.phase=='prepare' then
+                -- barrier open: wait for "go"; the host now leads, so our own fallback waits longer
+                S.message='Waiting for all players...'
+                if S.pending and S.pending.id==d.id then S.pending.fallback_at=math.max(S.pending.fallback_at,now()+30) end
+            elseif S.cin.barrier and d.phase=='play' then
+                -- "go": play now (tick), once. Already playing -> acknowledge as before.
+                if E.current_id and E.current_id()==d.id and E.playing() then
+                    S.cin.seen=true
+                    send('cinack3',{token=d.token,id=d.id,skippable=not E.can_skip or E.can_skip()})
+                    if E.correct_tracks and type(d.tracks)=='table' then E.correct_tracks(d.tracks) end
+                elseif not S.cin.go and not S.cin.seen and d.area==area()
+                    and not (S.local_played and S.local_played[d.id] and now()-S.local_played[d.id]<180) then
+                    S.cin.go=now()
+                end
+                if S.vote_local then send('cinvote3',{token=d.token,id=d.id}) end
+            elseif d.phase=='prepare' then
                 if E.load and d.area==area() and not S.cin.preloaded then
                     local ok,value=pcall(E.load,d.id)
                     if ok and value~=false then S.cin.preloaded=true end
@@ -203,7 +274,7 @@ function M.new(E)
     -- Client: a cutscene the game wanted to play is held until the host confirms it. If that
     -- never happens (host elsewhere, message lost, connection gone), play it here with the game's
     -- own callbacks, so the client is never left on a black screen.
-    local function release_pending(reason)
+    function release_pending(reason)
         local p=S.pending
         if not p then return end
         S.pending=nil
@@ -226,7 +297,7 @@ function M.new(E)
             if not connected() then S.cin={active=false,phase='end'} end
         end
         if not connected() then S.queue={};return end
-        if now()-S.last_hello>2 then send('session3',{version=3,rpc_seq=S.rpc_tx});S.last_hello=now() end
+        if now()-S.last_hello>2 then send('session3',{version=3,rpc_seq=S.rpc_tx,barrier=1});S.last_hello=now() end
         if not S.cap then return end
         local playing=E.playing()
         if host() then
@@ -245,8 +316,23 @@ function M.new(E)
             if playing and not S.cin.active and S.cin.phase~='skip' and E.current_id then
                 local id=E.current_id()
                 if id and (not S.cin.token or id~=S.cin.id) then
-                    S.begin(id,E.current_flow and E.current_flow() or 0)
+                    S.begin(id,E.current_flow and E.current_flow() or 0,nil,true)   -- already playing: no barrier
                     S.cin.seen=true;S.cin.phase='play';publish()
+                end
+            end
+            if S.cin.active and S.cin.barrier and S.cin.phase=='prepare' then
+                if S.cin.peer_joined or now()-S.cin.started>(E.barrier_timeout or 15) then
+                    -- "go": publish first so the partner starts with only network delay, then play ours
+                    S.cin.phase='play';S.cin.started=now()
+                    S.message=S.cin.peer_absent and 'Your partner is in another area - playing alone.'
+                        or (not S.cin.peer_joined and 'Your partner did not respond - playing alone.') or ''
+                    publish()
+                    local h=S.host_hold or {id=S.cin.id,flow=S.cin.flow,args={auto=S.cin.auto}}
+                    S.host_hold=nil
+                    S.internal_play=S.internal_play+1
+                    local ok,result=pcall(E.play,h.id,h.flow,h.args or {})
+                    S.internal_play=S.internal_play-1
+                    if not ok or result==false then S.error='Host could not start the cutscene: '..tostring(result) end
                 end
             end
             if S.cin.active then
@@ -286,6 +372,33 @@ function M.new(E)
                 end
             end
         else
+            -- Start barrier (client): report ready (after moving next to the host if our game didn't
+            -- trigger the scene) or absent (other area); on "go" play once, with our held call if any.
+            if S.cin.active and S.cin.barrier then
+                if S.cin.phase=='prepare' then
+                    if now()-(S.last_ready or -100)>0.5 then
+                        S.last_ready=now()
+                        -- absent: other area, or we already played this scene alone (safety net)
+                        local played=S.local_played and S.local_played[S.cin.id]
+                        local absent=S.cin.area~=area() or (played~=nil and now()-played<180)
+                        if not absent and not (S.pending and S.pending.id==S.cin.id) and S.cin.where
+                            and not S.cin.warped and E.warp then
+                            S.cin.warped=true;pcall(E.warp,S.cin.where)
+                        end
+                        send('cinready3',{token=S.cin.token,absent=absent})
+                    end
+                elseif S.cin.phase=='play' and S.cin.go and not S.cin.go_started and not playing then
+                    S.cin.go_started=now()
+                    local p=S.pending
+                    local args=(p and p.id==S.cin.id and p.args) or {auto=false}
+                    if p and p.id==S.cin.id then S.pending=nil end
+                    S.internal_play=S.internal_play+1
+                    local ok,result=pcall(E.play,S.cin.id,S.cin.flow,args)
+                    S.internal_play=S.internal_play-1
+                    if ok and result~=false then S.stats.starts=S.stats.starts+1;S.message=''
+                    else S.error='Could not start the cutscene: '..tostring(result) end
+                end
+            end
             -- Host-started scene. A cutscene that isn't preloaded loads for a few seconds before
             -- IsPlayingCutScene is true; re-requesting it meanwhile restarts the load (real session:
             -- 8 requests, black screen). Request once, then wait. After a warp, give the game's own
@@ -401,7 +514,8 @@ function M.engine(E)
         for i=5,6 do
             if parameters[i]:get_full_name():find('System.Nullable',1,true) then defaults[i]=ValueType.new(parameters[i]) end
         end
-        return play_method:call(med(),id,flow,'RequiemCoop',args and args.auto or false,
+        -- held calls replay with the game's own caller name; host-started ones use ours
+        return play_method:call(med(),id,flow,args and args.name or 'RequiemCoop',args and args.auto or false,
             args and args.start_callback or defaults[5],args and args.end_callback or defaults[6])
     end
     E.skip=function() return med():call('skip(System.Object)',med()) end
@@ -501,6 +615,10 @@ function M.engine(E)
         end
         function S.engine_play(args)
             local pending={auto=(sdk.to_int64(args[8])&0xFF)~=0}
+            pcall(function()
+                local name=sdk.to_managed_object(args[5])
+                if name then pending.name=name:call('ToString') end
+            end)
             for _,spec in ipairs({{'start_callback',6},{'end_callback',7}}) do
                 local obj=sdk.to_managed_object(args[spec[2]])
                 if obj then pending[spec[1]]=obj:add_ref() end

@@ -16,7 +16,7 @@ local function pair(opts)
             tracks=opts[role..'_tracks'],
             role=function()return role end,peer=function()return role..'-peer'end,
             send=function(k,d)wire[#wire+1]={from=role,k=k,d=copy(d)}end,
-            area=function()if opts.no_area then return nil end;return 'Chap2_10'end,where=function()if opts.no_area then return nil end;return{0,0,0,0,0,0,1}end,
+            area=function()if opts.no_area then return nil end;return opts[role..'_area'] or 'Chap2_10'end,where=function()if opts.no_area then return nil end;return{0,0,0,0,0,0,1}end,
             playing=function()return actor.playing end,current_id=function()return actor.id end,
             can_skip=function()return actor.can_skip end,warp=function()return true end,
             play=function(id,flow,args)
@@ -223,6 +223,77 @@ do
     check(a.client.playing and a.client.id==111001,'loading cutscene never started on client')
     for _=1,6 do tick()end
     check(h.cin.peer_ready,'client did not acknowledge after loading')
+end
+-- Start barrier: every cutscene waits for all players, then starts together.
+do
+    -- host's game triggers: both wait, the client reports ready, both start within one update
+    local h,c,a,tick,flush=pair()
+    local game_cb={end_callback='host-game-cb'}
+    check(h.begin(201,0,game_cb),'host did not hold its own cutscene for the barrier')
+    check(h.message=='Waiting for all players...','host did not show the barrier message')
+    flush()
+    check(c.message=='Waiting for all players...','client did not show the barrier message')
+    check(not a.host.playing and not a.client.playing,'a cutscene started before all players were ready')
+    local started={}
+    for i=1,20 do tick()
+        if a.host.playing and not started.host then started.host=i end
+        if a.client.playing and not started.client then started.client=i end
+        if started.host and started.client then break end
+    end
+    check(started.host and started.client,'barrier never released')
+    check(math.abs(started.host-started.client)<=1,'host and client did not start together')
+    check(a.host.args and a.host.args.end_callback=='host-game-cb','host lost its game callback')
+    check(h.message=='' and c.message=='','barrier message stayed after the start')
+    for _=1,6 do tick()end
+    h.request_skip();flush();tick()
+    check(a.host.skips==0,'one vote skipped after the barrier')
+    c.request_skip();flush();tick();tick()
+    check(a.host.skips==1 and a.client.skips==1,'two votes did not skip after the barrier')
+end
+do
+    -- partner's game triggers: the host opens the barrier, both start together, the client keeps its callback
+    local h,c,a,tick,flush=pair()
+    check(c.begin(202,4,{end_callback='client-game-cb'}),'client did not hold its cutscene')
+    flush()
+    check(h.cin.active and h.cin.barrier and h.cin.id==202,'host did not open a barrier for the partner trigger')
+    local started={}
+    for i=1,20 do tick()
+        if a.host.playing and not started.host then started.host=i end
+        if a.client.playing and not started.client then started.client=i end
+        if started.host and started.client then break end
+    end
+    check(started.host and started.client and math.abs(started.host-started.client)<=1,'partner trigger did not start together')
+    check(a.client.args and a.client.args.end_callback=='client-game-cb','client lost its game callback')
+    check(a.client.plays==1 and a.host.plays==1,'a player started the scene more than once')
+end
+do
+    -- partner in another area: the host doesn't wait for it
+    local h,c,a,tick,flush=pair({client_area='Chap3_01'})
+    h.begin(203,0,{});flush()
+    for _=1,5 do tick()end
+    check(a.host.playing,'host waited for a partner in another area')
+    check(not a.client.playing,'partner in another area was pulled into the scene')
+    check(h.message:find('another area',1,true),'host was not told the partner is elsewhere')
+end
+do
+    -- host in another area: the partner plays its own trigger immediately, no 10 s wait
+    local h,c,a,tick,flush=pair({host_area='Chap3_01'})
+    c.begin(204,0,{end_callback='cb'});flush()
+    tick()
+    check(a.client.playing and a.client.id==204,'partner waited although the host is elsewhere')
+    check(not a.host.playing,'host in another area was pulled into the scene')
+end
+do
+    -- partner never answers: the host goes alone after the timeout
+    local h,c,a,tick,flush,wire=pair()
+    h.begin(205,0,{})
+    for i=#wire,1,-1 do if wire[i].k=='cin3' then table.remove(wire,i) end end
+    local orig=c.handle
+    c.handle=function(k,d) if k~='cin3' then return orig(k,d) end end   -- partner deaf to cin3
+    for _=1,100 do tick()end
+    check(not a.host.playing,'host gave up on the barrier too early')
+    for _=1,60 do tick()end
+    check(a.host.playing,'host never went alone after the barrier timeout')
 end
 local t=0
 local torch=M.torch({now=function()return t end,peer_stream=function()return 123 end})

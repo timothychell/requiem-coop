@@ -3,6 +3,21 @@
 Both players must use the same release. Install by extracting the zip into the game folder
 (see the README). Every release is an experimental preview.
 
+## 0.11.0-preview
+
+- **Cutscenes start together.** Whichever game triggers a cutscene, both games hold it and show "Waiting for
+  all players..." at the top left. The partner gets ready: it is moved next to the host if its own game didn't
+  trigger the scene, or reports that it's in another area. Then the host sends "go" and both start at once
+  (the gap is one network hop).
+  - The game's own callbacks and caller name are kept for every held cutscene.
+  - If the partner doesn't answer within 15 s, the host goes alone.
+  - If the host is in another area or another cutscene, the partner is told immediately and plays its scene
+    alone instead of waiting.
+  - Skipping still needs both players.
+- Cutscenes in different areas aren't synced yet: that needs moving a player into the other area first.
+- Fixed earlier tonight: cutscene sync failed before the player existed (New Game opening), and a partner
+  joining a host cutscene in progress could get stuck in a loading loop.
+
 ## 0.10.0-preview
 
 - **Co-op is now in the game's own title menu.** A "Co-op" entry sits below Main Story. Choosing it turns the

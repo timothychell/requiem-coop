@@ -1,4 +1,5 @@
--- Requiem Co-op 0.10.0-preview: native Co-op entry and lobby in the game's title menu,
+-- Requiem Co-op 0.11.0-preview: cutscene start barrier (all players start together),
+-- native Co-op entry and lobby in the game's title menu,
 -- native playback of dynamic (first-person) motion banks,
 -- performance pass (cached engine handles, native accessory constraint, staggered scans)
 -- and a negotiated lossless v2 state header.
@@ -167,7 +168,7 @@ end
 -- negotiate this extension and acknowledge resource setup before bones stop.
 -- Complex blend trees/dynamic motions retain the existing bone fallback.
 ---------------------------------------------------------------------------
-local anim = { MOD_VERSION = "0.10.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
+local anim = { MOD_VERSION = "0.11.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
     resources = {}, capture_cache = {}, last_announce = -100, bytes = 0, mode = "bones", error = "" }
 function anim.finite(x,limit) return type(x)=='number' and x==x and math.abs(x)<(limit or 1e7) end
 function anim.valid_transform(p,r)
