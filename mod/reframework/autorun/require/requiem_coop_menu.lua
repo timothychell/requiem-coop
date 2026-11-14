@@ -183,9 +183,11 @@ function M.new(api)
     local function press_main_story()
         local b, cb = self.behavior, self.last_cb
         if not (b and cb) then self.press_main_story = nil; return end
-        local h = helper()
-        local fsl = h and h:get_field("_ScrollList")
-        if not (fsl and fsl:call("get_ItemCount") == #(self.orig_values or {}) + 1 and selected() == 0) then
+        -- ready once the main list is rebuilt (our Co-op label is back on its row; the game hides some
+        -- entries such as type 10, so row counts can't be compared) and Main Story is highlighted
+        local coop = self.texts[COOP_INDEX]
+        local rebuilt = self.mode == "main" and coop and coop:call("get_Message") == self.labels[COOP_INDEX]
+        if not (rebuilt and selected() == 0) then
             if api.now() - self.press_main_story > 2 then self.press_main_story = nil end   -- give up: Main Story stays highlighted
             return
         end
@@ -215,7 +217,13 @@ function M.new(api)
         if not ours then
             local is_title = false
             for _, v in ipairs(values) do if v == MAIN_STORY or v == 5 --[[Exit]] then is_title = true end end
-            if not is_title then return nil end
+            if not is_title then
+                -- another list in the same menu (e.g. Main Story's Continue / New Game / Load Game):
+                -- leave its rows alone entirely
+                self.other_list, self.labels, self.guides = true, {}, {}
+                return nil
+            end
+            self.other_list = false
             if not (self.orig and self.orig:get_address() == addr) then
                 if self.orig then pcall(self.orig.release, self.orig) end
                 self.orig = types:add_ref()
@@ -255,7 +263,7 @@ function M.new(api)
     -- last real one is kept to "press" Main Story after Start Game).
     function self.on_decided(this, cb)
         if not (this and self.behavior and this:get_address() == self.behavior:get_address()) then return false end
-        if self.auto_decide then return false end     -- our own Main Story press
+        if self.auto_decide or self.other_list then return false end     -- our own Main Story press / not our list
         local i = selected()
         if cb then
             local ok, v = pcall(cb.call, cb, "get_SelectIndex")
@@ -279,7 +287,8 @@ function M.new(api)
     end
 
     function self.on_canceled(this)
-        if not (this and self.behavior and this:get_address() == self.behavior:get_address()) or self.mode ~= "lobby" then return false end
+        if not (this and self.behavior and this:get_address() == self.behavior:get_address()) or self.mode ~= "lobby"
+            or self.other_list then return false end
         self.back()
         return true
     end
@@ -333,7 +342,7 @@ function M.new(api)
             self.behavior, self.mode, self.texts, self.guide_text = nil, "main", {}, nil
             return
         end
-        if self.mode == "lobby" then
+        if self.mode == "lobby" and not self.other_list then
             local rows = lobby_rows()
             local key = {}
             for i, r in ipairs(rows) do key[i] = r.id end
@@ -350,7 +359,7 @@ function M.new(api)
             end
             self.rows = rows
             for i, r in ipairs(rows) do self.labels[i - 1], self.guides[i - 1] = r.label, r.guide end
-        else
+        elseif not self.other_list then
             self.labels[COOP_INDEX], self.guides[COOP_INDEX] = api.coop_label(), api.coop_guide()
         end
         if self.press_main_story and not self.want_select then press_main_story() end
