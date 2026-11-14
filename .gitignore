@@ -1,0 +1,24 @@
+# build output
+plugin/build/
+dist/
+backups/
+.package-*/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# never commit game files, saves or runtime data
+*.pak
+*.bin
+*.coopbak
+reframework/data/
+coop_*.json
+coop_net_log.txt
+bridge_*.json
+*.zip
+
+# local in-game test/probe output (can contain Steam names/IDs and engine dumps)
+tools/*.json
+tools/*.png
