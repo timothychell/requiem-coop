@@ -1,4 +1,4 @@
--- Requiem Co-op 0.11.0-preview: cutscene start barrier (all players start together),
+-- Requiem Co-op 0.12.0-preview: cutscene pause barrier (all players start together),
 -- native Co-op entry and lobby in the game's title menu,
 -- native playback of dynamic (first-person) motion banks,
 -- performance pass (cached engine handles, native accessory constraint, staggered scans)
@@ -168,7 +168,7 @@ end
 -- negotiate this extension and acknowledge resource setup before bones stop.
 -- Complex blend trees/dynamic motions retain the existing bone fallback.
 ---------------------------------------------------------------------------
-local anim = { MOD_VERSION = "0.11.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
+local anim = { MOD_VERSION = "0.12.0-preview", version = 1, peer_version = 0, descriptors = {}, remote = {}, ready = {},
     resources = {}, capture_cache = {}, last_announce = -100, bytes = 0, mode = "bones", error = "" }
 function anim.finite(x,limit) return type(x)=='number' and x==x and math.abs(x)<(limit or 1e7) end
 function anim.valid_transform(p,r)
@@ -2182,7 +2182,7 @@ end
 
 local function handle_event(e)
     local k, v = e:match("^(%w+):(.*)$")
-    if session and (k=="session3" or k=="cin3" or k=="cinreq3" or k=="cinvote3" or k=="cinack3"
+    if session and (k=="session3" or k=="cin3" or k=="cinreq3" or k=="cinvote3" or k=="cinack3" or k=="cinready3" or k=="cindeny3" or k=="cinping3" or k=="cinpong3"
         or k=="flow3" or k=="rpc3" or k=="rpcreq3" or k=="rpcrepair3") then
         if #v<=65536 then
             local ok_s,error_s=pcall(session.handle,k,json.load_string(v))

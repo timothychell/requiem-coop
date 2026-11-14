@@ -13,7 +13,9 @@ local function pair(opts)
         local actor={playing=false,id=nil,skips=0,plays=0,can_skip=true,rpcs={},chapter='Chap2',flow=0,online=true}
         actors[role]=actor
         local E={epoch=role..'-epoch',now=function()return clock end,connected=function()return actor.online end,
-            tracks=opts[role..'_tracks'],
+            tracks=opts[role..'_tracks'],barrier=opts.barrier==true,
+            freeze=function(id)if actor.playing and actor.id==id and not actor.no_pause then actor.frozen=true;actor.freezes=(actor.freezes or 0)+1;return true end;return false end,
+            unfreeze=function(id)if actor.frozen then actor.frozen=false;actor.unfrozen_at=clock end;return true end,
             role=function()return role end,peer=function()return role..'-peer'end,
             send=function(k,d)wire[#wire+1]={from=role,k=k,d=copy(d)}end,
             area=function()if opts.no_area then return nil end;return opts[role..'_area'] or 'Chap2_10'end,where=function()if opts.no_area then return nil end;return{0,0,0,0,0,0,1}end,
@@ -224,25 +226,21 @@ do
     for _=1,6 do tick()end
     check(h.cin.peer_ready,'client did not acknowledge after loading')
 end
--- Start barrier: every cutscene waits for all players, then starts together.
+-- Pause barrier: the game's call is never blocked. Every copy of the scene starts for real, freezes,
+-- and all copies unfreeze together on the host's "go".
+local function run_until(tick,cond,n) for _=1,n or 40 do tick();if cond() then return true end end return cond() end
 do
-    -- host's game triggers: both wait, the client reports ready, both start within one update
-    local h,c,a,tick,flush=pair()
-    local game_cb={end_callback='host-game-cb'}
-    check(h.begin(201,0,game_cb),'host did not hold its own cutscene for the barrier')
+    -- host's game triggers: host plays natively (not blocked), freezes; client starts + freezes; both resume together
+    local h,c,a,tick,flush=pair({barrier=true})
+    check(not h.begin(201,0,{end_callback='host-cb'}),'host blocked its own cutscene call')
+    a.host.id=201;a.host.playing=true   -- the game's own call goes ahead
     check(h.message=='Waiting for all players...','host did not show the barrier message')
-    flush()
+    flush();tick()
     check(c.message=='Waiting for all players...','client did not show the barrier message')
-    check(not a.host.playing and not a.client.playing,'a cutscene started before all players were ready')
-    local started={}
-    for i=1,20 do tick()
-        if a.host.playing and not started.host then started.host=i end
-        if a.client.playing and not started.client then started.client=i end
-        if started.host and started.client then break end
-    end
-    check(started.host and started.client,'barrier never released')
-    check(math.abs(started.host-started.client)<=1,'host and client did not start together')
-    check(a.host.args and a.host.args.end_callback=='host-game-cb','host lost its game callback')
+    check(run_until(tick,function()return a.host.frozen and a.client.frozen end),'both copies never froze')
+    check(run_until(tick,function()return a.host.unfrozen_at and a.client.unfrozen_at end),'barrier never released')
+    check(math.abs(a.host.unfrozen_at-a.client.unfrozen_at)<=0.11,'host and client did not resume together')
+    check(a.host.plays==0 and a.client.plays==1,'scene started the wrong number of times')
     check(h.message=='' and c.message=='','barrier message stayed after the start')
     for _=1,6 do tick()end
     h.request_skip();flush();tick()
@@ -251,49 +249,69 @@ do
     check(a.host.skips==1 and a.client.skips==1,'two votes did not skip after the barrier')
 end
 do
-    -- partner's game triggers: the host opens the barrier, both start together, the client keeps its callback
-    local h,c,a,tick,flush=pair()
-    check(c.begin(202,4,{end_callback='client-game-cb'}),'client did not hold its cutscene')
+    -- partner's game triggers: client plays natively (not blocked), freezes; host starts + freezes; together
+    local h,c,a,tick,flush=pair({barrier=true})
+    check(not c.begin(202,4,{end_callback='client-cb'}),'client blocked its own cutscene call')
+    a.client.id=202;a.client.playing=true
     flush()
     check(h.cin.active and h.cin.barrier and h.cin.id==202,'host did not open a barrier for the partner trigger')
-    local started={}
-    for i=1,20 do tick()
-        if a.host.playing and not started.host then started.host=i end
-        if a.client.playing and not started.client then started.client=i end
-        if started.host and started.client then break end
-    end
-    check(started.host and started.client and math.abs(started.host-started.client)<=1,'partner trigger did not start together')
-    check(a.client.args and a.client.args.end_callback=='client-game-cb','client lost its game callback')
-    check(a.client.plays==1 and a.host.plays==1,'a player started the scene more than once')
+    check(run_until(tick,function()return a.host.unfrozen_at and a.client.unfrozen_at end),'partner-triggered barrier never released')
+    check(math.abs(a.host.unfrozen_at-a.client.unfrozen_at)<=0.11,'partner trigger did not resume together')
+    check(a.host.plays==1 and a.client.plays==0,'scene started the wrong number of times')
 end
 do
-    -- partner in another area: the host doesn't wait for it
-    local h,c,a,tick,flush=pair({client_area='Chap3_01'})
-    h.begin(203,0,{});flush()
-    for _=1,5 do tick()end
-    check(a.host.playing,'host waited for a partner in another area')
+    -- the slower PC can't freeze yet (still loading): the other waits frozen until it can
+    local h,c,a,tick,flush=pair({barrier=true})
+    h.begin(206,0,{});a.host.id=206;a.host.playing=true;flush()
+    a.client.no_pause=true
+    for _=1,30 do tick()end
+    check(a.host.frozen and not a.host.unfrozen_at,'host resumed before the partner was ready')
+    a.client.no_pause=false
+    check(run_until(tick,function()return a.host.unfrozen_at and a.client.unfrozen_at end),'barrier never released after loading')
+    check(math.abs(a.host.unfrozen_at-a.client.unfrozen_at)<=0.11,'did not resume together after loading')
+end
+do
+    -- partner in another area: the host doesn't wait
+    local h,c,a,tick,flush=pair({client_area='Chap3_01',barrier=true})
+    h.begin(203,0,{});a.host.id=203;a.host.playing=true;flush()
+    check(run_until(tick,function()return a.host.unfrozen_at end,10),'host waited for a partner in another area')
     check(not a.client.playing,'partner in another area was pulled into the scene')
     check(h.message:find('another area',1,true),'host was not told the partner is elsewhere')
 end
 do
-    -- host in another area: the partner plays its own trigger immediately, no 10 s wait
-    local h,c,a,tick,flush=pair({host_area='Chap3_01'})
-    c.begin(204,0,{end_callback='cb'});flush()
-    tick()
-    check(a.client.playing and a.client.id==204,'partner waited although the host is elsewhere')
+    -- host in another area: the partner unfreezes its own scene at once
+    local h,c,a,tick,flush=pair({host_area='Chap3_01',barrier=true})
+    c.begin(204,0,{});a.client.id=204;a.client.playing=true;flush()
+    for _=1,5 do tick()end
+    check(not a.client.frozen,'partner stayed frozen although the host is elsewhere')
+    check(c.message:find('another area',1,true),'partner was not told the host is elsewhere')
     check(not a.host.playing,'host in another area was pulled into the scene')
 end
 do
-    -- partner never answers: the host goes alone after the timeout
-    local h,c,a,tick,flush,wire=pair()
-    h.begin(205,0,{})
-    for i=#wire,1,-1 do if wire[i].k=='cin3' then table.remove(wire,i) end end
+    -- partner never answers: the host resumes alone after the timeout
+    local h,c,a,tick,flush=pair({barrier=true})
     local orig=c.handle
-    c.handle=function(k,d) if k~='cin3' then return orig(k,d) end end   -- partner deaf to cin3
-    for _=1,100 do tick()end
-    check(not a.host.playing,'host gave up on the barrier too early')
-    for _=1,60 do tick()end
-    check(a.host.playing,'host never went alone after the barrier timeout')
+    c.handle=function(k,d) if k~='cin3' then return orig(k,d) end end
+    h.begin(205,0,{});a.host.id=205;a.host.playing=true;flush()
+    for _=1,150 do tick()end
+    check(a.host.frozen and not a.host.unfrozen_at,'host gave up on the barrier too early')
+    check(run_until(tick,function()return a.host.unfrozen_at end,80),'host never resumed alone after the timeout')
+end
+do
+    -- connection lost while frozen: resume at once
+    local h,c,a,tick,flush=pair({barrier=true})
+    h.begin(207,0,{});a.host.id=207;a.host.playing=true;flush()
+    a.client.no_pause=true
+    for _=1,5 do tick()end
+    check(a.host.frozen,'host did not freeze')
+    a.host.online=false;tick()
+    check(not a.host.frozen,'host stayed frozen after the connection dropped')
+end
+do
+    -- barrier switched off locally: the old flow, host plays immediately
+    local h,c,a,tick,flush=pair({barrier=false})
+    check(not h.begin(210,0,{}),'host blocked its cutscene with the barrier off')
+    check(not h.cin.barrier,'barrier opened although switched off')
 end
 local t=0
 local torch=M.torch({now=function()return t end,peer_stream=function()return 123 end})

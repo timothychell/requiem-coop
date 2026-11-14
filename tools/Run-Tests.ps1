@@ -20,6 +20,7 @@ $suites = [ordered]@{
     'test_packet_regression.lua'  = $protocol
     'test_state_v2.lua'           = $protocol
     'test_session_sync.lua'       = $session
+    'test_routing.lua'            = $protocol + $session
 }
 $failed = 0
 foreach ($suite in $suites.Keys) {

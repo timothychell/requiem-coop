@@ -3,6 +3,24 @@
 Both players must use the same release. Install by extracting the zip into the game folder
 (see the README). Every release is an experimental preview.
 
+## 0.12.0-preview
+
+- **Cutscene barrier rebuilt around freezing instead of holding.** 0.11.0 blocked the game's own "play
+  cutscene" call and started it later. In the first real session that let the game's story logic run on
+  without the cutscene: a sequence was skipped and both players lost input. Now:
+  - The game's call is never blocked. Every copy of the scene starts for real and is frozen ~0.1 s in, using
+    the engine's own pause (`TimelineEventProcess.pause/resume`, verified in-game). The game sees a real,
+    running cutscene the whole time.
+  - The other PC starts the same scene and freezes it too: through its own trigger after being moved next to
+    the other player, or started by the mod.
+  - When both are frozen, the host measures the round trip, sends "go" and unfreezes its own copy half a
+    round trip later, so both resume at the same moment. A slower-loading PC holds the other at frame 0.
+  - Watchdogs: no answer in 20 s, a dropped connection, a host that can't take part, or 30 s frozen all
+    unfreeze immediately.
+- Fixed: the barrier's "ready"/"refused" messages were never forwarded to the session code, so every barrier
+  timed out with "Your partner did not respond". New routing test: fails if any session message type isn't
+  forwarded by the main script.
+
 ## 0.11.0-preview
 
 - **Cutscenes start together.** Whichever game triggers a cutscene, both games hold it and show "Waiting for

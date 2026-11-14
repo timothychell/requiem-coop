@@ -8,7 +8,7 @@ character that mirrors their real movement, and you appear in theirs. Sessions r
 invite a friend, both tick **Ready**, and when the host starts a New Game or loads a save, the partner's
 game follows automatically.
 
-> **Status: 0.11.0-preview, experimental.** Expect bugs, and back up your saves. Movement, animation,
+> **Status: 0.12.0-preview, experimental.** Expect bugs, and back up your saves. Movement, animation,
 > costumes, shared items/doors, shared enemies and save handoff work. Combat effects (muzzle flashes,
 > blood, sounds), grabs/finishers, breakable boxes and full cloth physics aren't synced yet. Host-led
 > cutscenes, mission sync and partner torches are implemented but still need more two-PC testing.
@@ -42,9 +42,10 @@ Unofficial fan project. Not affiliated with or endorsed by Capcom. No game files
 - **Shared story progress:** story counters, area flow, puzzle flags, objectives, lights, documents and
   watched cutscenes go through an ordered host event journal. Missing events are replayed, and mission
   counters are periodically repaired against the host.
-- **Cutscenes together:** whoever triggers a cutscene, both games hold it ("Waiting for all players...") until both are
-  ready, then start it together. Skipping needs **both** players to vote. A player in another area doesn't block
-  the other (cross-area cutscenes aren't supported yet).
+- **Cutscenes together:** whoever triggers a cutscene, it starts on both PCs and freezes on its first frame
+  ("Waiting for all players..."). When both copies are frozen, they unfreeze at the same moment (the host compensates
+  for network delay). The game's own cutscene call is never blocked. Skipping needs **both** players to vote.
+  A player in another area doesn't block the other (cross-area cutscenes aren't supported yet).
 - **Reloads, game over and pause together:** the host's reloads bring both players back into the same save,
   a death or mission failure ends the game for both, and pausing pauses the partner too.
 - **Held weapons and torches:** drawn weapon meshes and flashlight/lighter lights are recreated on the puppet.

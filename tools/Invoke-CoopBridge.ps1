@@ -33,7 +33,11 @@ $probeId = [Math]::Max($previousId + 1, [DateTimeOffset]::UtcNow.ToUnixTimeSecon
 $payload = @{ id = $probeId; code = $Code } | ConvertTo-Json -Depth 4
 $temporaryFile = Join-Path $dataDir "bridge_cmd.$probeId.tmp"
 [IO.File]::WriteAllText($temporaryFile, $payload, [Text.UTF8Encoding]::new($false))
-Move-Item -LiteralPath $temporaryFile -Destination $cmdFile -Force
+# the game may be reading the previous command file; retry briefly instead of failing
+for ($attempt = 0; ; $attempt++) {
+    try { Move-Item -LiteralPath $temporaryFile -Destination $cmdFile -Force -ErrorAction Stop; break }
+    catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 100 }
+}
 $deadline = [DateTime]::UtcNow.AddSeconds(10)
 do {
     Start-Sleep -Milliseconds 150
