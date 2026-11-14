@@ -264,7 +264,7 @@ function M.new(api)
             self.last_cb = cb:add_ref()
         end
         if self.mode == "main" then
-            if i == COOP_INDEX then self.open_lobby(); return true end
+            if i == COOP_INDEX then self.open_lobby(); self.reenable_until = api.now() + 0.5; return true end
             return false
         end
         local r = self.rows[i + 1]
@@ -272,6 +272,9 @@ function M.new(api)
             local ok, err = pcall(r.action)
             if not ok then self.error = tostring(err) end
         end
+        -- the helper switches its input off when an item is decided (it expects the menu to close);
+        -- we skipped the game's handling, so switch it back on in the next update
+        self.reenable_until = api.now() + 0.5
         return true
     end
 
@@ -316,6 +319,13 @@ function M.new(api)
         -- the cursor moved (so the description never shows the game's text for a frame)
         local t = api.now()
         local ok_s, sel_now = pcall(selected)
+        if self.reenable_until then
+            local h = helper()
+            if h and not h:get_field("_InputEnable") then
+                pcall(h.call, h, "setInputEnable(System.Boolean, System.Boolean)", true, false)
+            end
+            if t > self.reenable_until then self.reenable_until = nil end
+        end
         if ok_s and not (self.dirty or self.want_select or self.press_main_story) and sel_now == self.last_sel
             and t - (self.last_tick or -1) < 0.1 then return end
         self.last_tick, self.dirty, self.last_sel = t, false, sel_now
