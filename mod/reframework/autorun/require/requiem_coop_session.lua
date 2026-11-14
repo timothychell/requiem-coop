@@ -53,6 +53,13 @@ function M.new(E)
             S.message=''
             publish();return false
         end
+        if S.cin.active and S.cin.id==id then
+            -- The host is already in this scene (real session: halfway through when the partner's game
+            -- reached the trigger). Play it natively now, with the game's own callbacks; the host's
+            -- timeline positions then move it to the same point.
+            S.queue.play=nil;S.pending=nil;S.message=''
+            return false
+        end
         S.pending={id=id,flow=flow,args=pending,until_time=now()+30,fallback_at=now()+(E.fallback_seconds or 10)}
         S.message='Waiting for the host to reach this cutscene...'
         send('cinreq3',{id=id,flow=flow,area=area(),where=E.where(),auto=pending and pending.auto or false})
@@ -279,19 +286,29 @@ function M.new(E)
                 end
             end
         else
+            -- Host-started scene. A cutscene that isn't preloaded loads for a few seconds before
+            -- IsPlayingCutScene is true; re-requesting it meanwhile restarts the load (real session:
+            -- 8 requests, black screen). Request once, then wait. After a warp, give the game's own
+            -- trigger (with its callbacks) a moment to fire first.
             local q=S.queue.play
             if q then
-                if now()>q.until_time then S.queue.play=nil;S.error='Timed out waiting for host cinematic resources'
+                if playing and (not E.current_id or E.current_id()==q.id) then
+                    S.queue.play=nil;S.pending=nil
+                elseif now()>q.until_time then S.queue.play=nil;S.error='Timed out waiting for host cinematic resources'
+                elseif q.requested then
+                    if now()-q.requested>15 then S.queue.play=nil;S.error='The host cutscene did not start on this PC' end
                 elseif q.area==area() and not playing then
-                    if q.where and not q.warped then q.warped=E.warp(q.where)~=false
+                    if q.where and not q.warped then q.warped=E.warp(q.where)~=false;q.warp_time=now()
+                    elseif q.warped and now()-(q.warp_time or 0)<1 and not (S.pending and S.pending.id==q.id) then
+                        -- the game's own trigger may fire here; begin() then lets it play natively
                     else
                         local args=S.pending and S.pending.id==q.id and S.pending.args or {}
                         args.auto=q.auto
                         S.internal_play=S.internal_play+1
                         local ok,result=pcall(E.play,q.id,q.flow,args)
                         S.internal_play=S.internal_play-1
-                        if ok and result~=false then S.queue.play=nil;S.pending=nil;S.stats.starts=S.stats.starts+1
-                        else S.error=ok and 'Client cutscene request returned false' or tostring(result) end
+                        if ok and result~=false then q.requested=now();S.pending=nil;S.stats.starts=S.stats.starts+1
+                        else S.queue.play=nil;S.error=ok and 'Client cutscene request returned false' or tostring(result) end
                     end
                 end
             end

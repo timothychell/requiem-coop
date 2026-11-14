@@ -16,12 +16,14 @@ local function pair(opts)
             tracks=opts[role..'_tracks'],
             role=function()return role end,peer=function()return role..'-peer'end,
             send=function(k,d)wire[#wire+1]={from=role,k=k,d=copy(d)}end,
-            area=function()if opts.no_area then return nil end;return 'Chap2_10'end,where=function()return{0,0,0,0,0,0,1}end,
+            area=function()if opts.no_area then return nil end;return 'Chap2_10'end,where=function()if opts.no_area then return nil end;return{0,0,0,0,0,0,1}end,
             playing=function()return actor.playing end,current_id=function()return actor.id end,
             can_skip=function()return actor.can_skip end,warp=function()return true end,
             play=function(id,flow,args)
                 if endpoints[role].begin(id,flow,args) then return true end
-                actor.id=id;actor.playing=true;actor.plays=actor.plays+1;actor.args=args;return true
+                actor.plays=actor.plays+1;actor.args=args
+                if actor.delay then actor.start_at=clock+actor.delay;actor.loading_id=id;return true end
+                actor.id=id;actor.playing=true;return true
             end,
             skip=function()actor.skips=actor.skips+1;actor.playing=false;return true end,
             apply_rpc=function(i,args)if actor.reject_rpc then return false end;actor.rpcs[#actor.rpcs+1]={i,args};actor.flow=actor.flow+1;return true end,
@@ -40,16 +42,18 @@ local function pair(opts)
         end
     end
     local function tick(dt)
-        clock=clock+(dt or 0.1);endpoints.host.tick();endpoints.client.tick();flush()
+        clock=clock+(dt or 0.1)
+        for _,ac in pairs(actors) do if ac.start_at and clock>=ac.start_at then ac.start_at=nil;ac.playing=true;ac.id=ac.loading_id end end
+        endpoints.host.tick();endpoints.client.tick();flush()
     end
     tick();tick()
     check(endpoints.host.cap and endpoints.client.cap,'capability handshake')
-    return endpoints.host,endpoints.client,actors,tick,flush,wire
+    return endpoints.host,endpoints.client,actors,tick,flush,wire,function()return clock end
 end
 do
     local h,c,a,tick,flush=pair()
     h.begin(101,2,{auto=true});a.host.id=101;a.host.playing=true;flush()
-    for _=1,4 do tick()end
+    for _=1,20 do tick();if a.client.playing then break end end   -- includes the post-warp grace
     check(a.client.playing and a.client.id==101,'host start did not play on client')
     check(c.hide_puppet(),'cinematic puppet not hidden')
     check(h.request_skip(),'host skip was not held')
@@ -67,13 +71,14 @@ do
     h.begin(102,0);a.host.id=102;a.host.playing=true;flush()
     h.request_skip();c.request_skip();flush();tick()
     check(a.host.skips==0,'host skipped before client readiness')
-    for _=1,12 do tick();if a.host.skips==1 and a.client.skips==1 then break end end
+    for _=1,30 do tick();if a.host.skips==1 and a.client.skips==1 then break end end
     check(a.host.skips==1 and a.client.skips==1,'early votes were lost')
 end
 do
     local h,c,a,tick,flush=pair()
     h.begin(103,0);a.host.id=103;a.host.playing=true;flush()
-    for _=1,4 do tick()end
+    for _=1,20 do tick();if a.client.playing then break end end
+    check(a.client.playing,'client never started the host scene')
     a.host.playing=false;tick();tick()
     check(not a.client.playing and a.client.skips==1,'host natural end left client watching')
     local old=c.last_host_seq
@@ -197,6 +202,27 @@ do
     h.request_skip();c.request_skip();flush()
     for _=1,6 do tick()end
     check(a.host.skips==1 and a.client.skips==1,'skip votes did not commit without an area')
+end
+do
+    -- Real session: the host was halfway through 111000 when the partner's game reached the trigger.
+    -- The partner must play it natively at once, not hold it waiting for the host.
+    local h,c,a,tick,flush=pair()
+    h.begin(111000,0);a.host.id=111000;a.host.playing=true;flush()
+    a.client.delay=3   -- keep the client from being started by the host before its own trigger
+    tick()
+    check(not c.begin(111000,0,{end_callback='native-cb'}),'client held a scene the host is already playing')
+    check(c.pending==nil and c.queue.play==nil,'client kept a request for a scene the host is playing')
+end
+do
+    -- Loading takes seconds: the client must request the host's scene once, not every packet.
+    local h,c,a,tick,flush=pair()
+    a.client.delay=4
+    h.begin(111001,0);a.host.id=111001;a.host.playing=true;flush()
+    for _=1,80 do tick()end
+    check(a.client.plays==1,'client re-requested a loading cutscene ('..a.client.plays..' requests)')
+    check(a.client.playing and a.client.id==111001,'loading cutscene never started on client')
+    for _=1,6 do tick()end
+    check(h.cin.peer_ready,'client did not acknowledge after loading')
 end
 local t=0
 local torch=M.torch({now=function()return t end,peer_stream=function()return 123 end})
