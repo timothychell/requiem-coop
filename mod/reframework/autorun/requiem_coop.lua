@@ -3930,20 +3930,36 @@ do
     end
 end
 do
+    -- Real input never calls onSelectItemDecided/onSelectItemCanceled: the scroll-list helper invokes
+    -- compiler-generated callbacks registered in setupScrollListHelper (verified in-game: b__9_0 =
+    -- decided -> TitleFlowController.on*, b__9_1 = canceled, b__9_2 = cursor moved, b__9_3 = list
+    -- update). Both the callbacks and the named methods are hooked; neither calls the other.
     local TITLE_MENU_TD = sdk.find_type_definition("app.UI1010GuiBehavior")
-    if not _G.__requiem_coop_title_menu_hooks and TITLE_MENU_TD then
-        _G.__requiem_coop_title_menu_hooks = true
-        local function forward(name)
-            return function(args)
-                local h = _G.__requiem_coop_title_menu
-                local ok, skip = pcall(function() return h and h[name](args) end)
-                if ok and skip then return sdk.PreHookResult.SKIP_ORIGINAL end
-            end
+    local function callback(index)
+        for _, m in ipairs(TITLE_MENU_TD:get_methods()) do
+            if m:get_name() == "<setupScrollListHelper>b__9_" .. index then return m end
         end
+    end
+    local function forward(name)
+        return function(args)
+            local h = _G.__requiem_coop_title_menu
+            local ok, skip = pcall(function() return h and h[name](args) end)
+            if ok and skip then return sdk.PreHookResult.SKIP_ORIGINAL end
+        end
+    end
+    if TITLE_MENU_TD and not _G.__requiem_coop_title_menu_hooks then
+        _G.__requiem_coop_title_menu_hooks = true
         sdk.hook(TITLE_MENU_TD:get_method("updateItems"), forward("update_items"), nil)
         sdk.hook(TITLE_MENU_TD:get_method("onSelectItemDecided"), forward("decided"), nil)
         sdk.hook(TITLE_MENU_TD:get_method("onSelectItemCanceled"), forward("canceled"), nil)
     end
+    if TITLE_MENU_TD and not _G.__requiem_coop_title_menu_hooks2 then
+        _G.__requiem_coop_title_menu_hooks2 = true
+        local decided, canceled = callback(0), callback(1)
+        if decided then sdk.hook(decided, forward("decided"), nil) end
+        if canceled then sdk.hook(canceled, forward("canceled"), nil) end
+    end
+    if lobby.menu then lobby.menu.decide_method = TITLE_MENU_TD and callback(0) end
 end
 _G.__requiem_coop_menu = nil   -- disables hooks left by 0.9.0 development builds
 -- Read-only handles for the in-game benchmark (tools/bench_perf.lua). Nothing calls these.

@@ -192,7 +192,9 @@ function M.new(api)
         self.press_main_story = nil
         cb:call("set_SelectIndex", 0)
         self.auto_decide = true
-        local ok, err = pcall(b.call, b, "onSelectItemDecided", cb)
+        local ok, err
+        if self.decide_method then ok, err = pcall(self.decide_method.call, self.decide_method, b, cb)   -- the real input path
+        else ok, err = pcall(b.call, b, "onSelectItemDecided", cb) end
         self.auto_decide = false
         if not ok then self.error = tostring(err) end
     end
